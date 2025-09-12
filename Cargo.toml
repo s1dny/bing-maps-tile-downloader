@@ -1,0 +1,19 @@
+[package]
+name = "bing"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "bing"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.99"
+clap = { version = "4.5.47", features = ["derive"] }
+futures = "0.3.31"
+indicatif = "0.18.0"
+rayon = "1.11.0"
+reqwest = { version = "0.12.23", features = ["rustls-tls", "gzip", "brotli", "deflate"] }
+tokio = { version = "1.47.1", features = ["rt-multi-thread", "macros", "fs"] }
+walkdir = "2.5.0"
+which = "8.0.0"
