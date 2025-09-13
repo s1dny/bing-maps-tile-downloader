@@ -27,7 +27,7 @@ cd bing_maps_tile_downloader
 cargo build --release
 ```
 
-The compiled binary will be available at `target/release/bing`
+The compiled binary will be available at `target/release/bing`. You can add this to your path.
 
 ## Usage
 
