@@ -38,6 +38,10 @@ pub struct Args {
     /// Dry run: list what would be processed without executing
     #[arg(long, action = ArgAction::SetTrue)]
     pub dry_run: bool,
+
+    /// Split tiles into a grid of subdirectories (must be a perfect square: 1, 4, 9, 16, 25, etc.)
+    #[arg(long = "split", default_value_t = 1)]
+    pub split: usize,
 }
 
 enum CliKind {
@@ -68,23 +72,20 @@ pub fn run_decompress(args: Args) -> Result<()> {
     // Gather .glb files.
     let files = collect_glb_files(&args.input_dir, args.recursive)?;
     println!(
-        "Found {} .glb file(s) in {:?}. Output → {:?}",
+        "GLB files: {}\nOutput: {:?}",
         files.len(),
-        args.input_dir,
         out_dir
     );
     if files.is_empty() {
         return Ok(());
     }
 
-    // Progress bar.
     let pb = ProgressBar::new(files.len() as u64);
     pb.set_style(
         ProgressStyle::with_template(
-            "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} • {msg}",
+            "[{elapsed_precise}] [{bar:30.cyan/blue}] {pos}/{len} - ETA {eta}",
         )
         .unwrap()
-        .progress_chars("##-"),
     );
 
     let force = args.force;
@@ -97,7 +98,13 @@ pub fn run_decompress(args: Args) -> Result<()> {
             let file_name = in_path
                 .file_name()
                 .ok_or_else(|| anyhow!("Bad filename"))?;
-            let out_path = out_dir.join(file_name);
+            
+            // Calculate relative path from input directory to maintain directory structure
+            let relative_path = in_path
+                .strip_prefix(&args.input_dir)
+                .map_err(|_| anyhow!("Failed to calculate relative path"))?;
+            
+            let out_path = out_dir.join(relative_path);
 
             if out_path.exists() && !force {
                 pb.inc(1);
@@ -114,8 +121,11 @@ pub fn run_decompress(args: Args) -> Result<()> {
                 return Ok(());
             }
 
-            fs::create_dir_all(&out_dir)
-                .with_context(|| format!("Creating parent for {:?}", out_path))?;
+            // Ensure the parent directory exists
+            if let Some(parent) = out_path.parent() {
+                fs::create_dir_all(parent)
+                    .with_context(|| format!("Creating parent for {:?}", out_path))?;
+            }
 
             // Build command
             let status = match &cli {

@@ -40,7 +40,7 @@ pub struct Args {
     pub out: PathBuf,
 
     /// Bing API key
-    #[arg(long = "api-key", default_value = "Avgpt4glVmwdaRf4eu1vWgCjDwKQPLHus3HNzgIZw5MS9GYmtVx0GnZTL33Y7avR")]
+    #[arg(long = "api-key", default_value = "Ar9wCt_eD79MwUsC3wup-erRDfnN0VKqPSZQ4yiCNDucBOJBeflFCNZQUgocler6")]
     pub api_key: String,
 
     /// Zoom level (max ~20)
@@ -50,6 +50,10 @@ pub struct Args {
     /// Concurrent requests
     #[arg(long = "concurrency", default_value_t = 100)]
     pub concurrency: usize,
+
+    /// Split tiles into a grid of subdirectories (must be a perfect square: 1, 4, 9, 16, 25, etc.)
+    #[arg(long = "split", default_value_t = 1)]
+    pub split: usize,
 }
 
 #[inline]
@@ -210,7 +214,34 @@ fn parse_coordinates(s: &str) -> Result<(f64, f64)> {
     Ok((lat, lon))
 }
 
+fn validate_and_get_grid_size(split: usize) -> Result<usize> {
+    if split == 0 {
+        return Err(anyhow!("Split parameter must be greater than 0"));
+    }
+    
+    let grid_size = (split as f64).sqrt() as usize;
+    if grid_size * grid_size != split {
+        return Err(anyhow!("Split parameter must be a perfect square (1, 4, 9, 16, 25, etc.), got {}", split));
+    }
+    
+    Ok(grid_size)
+}
+
+fn get_tile_subfolder(x: i32, y: i32, grid_size: usize) -> String {
+    if grid_size == 1 {
+        return String::new();
+    }
+    
+    let grid_x = (x.abs() as usize) % grid_size;
+    let grid_y = (y.abs() as usize) % grid_size;
+    
+    format!("{:02}_{:02}", grid_x, grid_y)
+}
+
 pub async fn run_download(args: Args) -> Result<()> {
+
+    // Validate split parameter
+    let grid_size = validate_and_get_grid_size(args.split)?;
 
     // Determine bbox
     let (lat1, lon1, lat2, lon2) = if let (Some(center), Some(size)) = (&args.center_coord, args.size)
@@ -255,13 +286,15 @@ pub async fn run_download(args: Args) -> Result<()> {
     println!("Tile range: {:?}", ranges);
     println!("Tile total: {} ", tiles.len());
     println!("Concurrency: {}", args.concurrency);
+    if args.split > 1 {
+        println!("Split: {} ({}x{} grid)", args.split, grid_size, grid_size);
+    }
     println!("Directory: {}", args.out.display());
 
-    // Prepare progress bar
     let pb = ProgressBar::new(tiles.len() as u64);
     pb.set_style(
         ProgressStyle::with_template(
-            "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} tiles ({per_sec}, ETA {eta})",
+            "[{elapsed_precise}] [{bar:30.cyan/blue}] {pos}/{len} - ETA {eta}",
         )
         .unwrap(),
     );
@@ -272,6 +305,7 @@ pub async fn run_download(args: Args) -> Result<()> {
     let api_key = Arc::new(args.api_key);
     let client = Arc::new(client);
     let host = Arc::new(DEFAULT_HOST.to_string());
+    let grid_size = Arc::new(grid_size);
 
     // Work stream with bounded concurrency, progress updates as each completes.
     stream::iter(tiles.into_iter())
@@ -284,6 +318,7 @@ pub async fn run_download(args: Args) -> Result<()> {
                 let api_key = api_key.clone();
                 let client = client.clone();
                 let host = host.clone();
+                let grid_size = grid_size.clone();
 
                 async move {
                     let qk = tile_xy_to_quadkey(x, y, z);
@@ -291,7 +326,16 @@ pub async fn run_download(args: Args) -> Result<()> {
                         "{}/tiles/mtx{}?g={}&tf={}&n=z&key={}&form=web3d",
                         host, qk, DEFAULT_G, DEFAULT_TF, api_key
                     );
-                    let out_path = out_dir.join(format!("{}_{}_{}.glb", z, x, y));
+                    
+                    // Determine subfolder based on tile coordinates
+                    let subfolder = get_tile_subfolder(x, y, *grid_size);
+                    let final_dir = if subfolder.is_empty() {
+                        out_dir.as_ref().clone()
+                    } else {
+                        out_dir.join(&subfolder)
+                    };
+                    
+                    let out_path = final_dir.join(format!("{}_{}_{}.glb", z, x, y));
                     let res = download_one(&client, &url, &out_path).await.unwrap_or_else(|e| {
                         eprintln!("Exception downloading {}: {}", url, e);
                         false
